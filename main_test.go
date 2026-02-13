@@ -6,13 +6,42 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
+
+var testMutex sync.Mutex
+var originalCache *Cache
+
+func TestMain(m *testing.M) {
+	originalCache = cache
+	os.Exit(m.Run())
+}
+
+func restoreCache() {
+	cache = originalCache
+}
+
+func waitForRebuildComplete(t *testing.T, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cache.RLock()
+		done := atomic.LoadInt32(&cache.isRebuilding) == 0
+		cache.RUnlock()
+		if done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Log("Warning: rebuild did not complete within timeout")
+}
 
 func TestExtractKeysFromValue(t *testing.T) {
 	logEntry := logrus.NewEntry(logrus.New())
@@ -356,11 +385,11 @@ func TestDetermineMatches(t *testing.T) {
 	pathMatches := []string{"prod/db/creds", "prod/api/keys", "prod/cache"}
 
 	tests := []struct {
-		name           string
-		params         *SearchParams
-		expectedCount  int
-		expectedIn     []string
-		expectedNotIn  []string
+		name          string
+		params        *SearchParams
+		expectedCount int
+		expectedIn    []string
+		expectedNotIn []string
 	}{
 		{
 			name:          "Content search only",
@@ -424,6 +453,9 @@ func TestBuildSearchString(t *testing.T) {
 }
 
 func TestSearchHandler(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
 	setupTestCache()
 
 	tests := []struct {
@@ -468,6 +500,9 @@ func TestSearchHandler(t *testing.T) {
 }
 
 func TestSearchHandlerWithSort(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
 	setupTestCache()
 
 	req := httptest.NewRequest(http.MethodGet, "/search?term=key&sort=asc", nil)
@@ -494,6 +529,9 @@ func TestSearchHandlerWithSort(t *testing.T) {
 }
 
 func TestSearchHandlerShowUI(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
 	setupTestCache()
 
 	req := httptest.NewRequest(http.MethodGet, "/search?term=password&show_ui=true", nil)
@@ -526,35 +564,45 @@ func TestRebuildHandler(t *testing.T) {
 		method       string
 		body         string
 		expectStatus int
+		waitForAsync bool
 	}{
-		{
-			name:         "Valid rebuild request",
-			method:       http.MethodPost,
-			body:         `{"rebuild": "true"}`,
-			expectStatus: http.StatusOK,
-		},
 		{
 			name:         "Wrong method",
 			method:       http.MethodGet,
 			body:         ``,
 			expectStatus: http.StatusMethodNotAllowed,
+			waitForAsync: false,
 		},
 		{
 			name:         "Invalid JSON",
 			method:       http.MethodPost,
 			body:         `{invalid}`,
 			expectStatus: http.StatusBadRequest,
+			waitForAsync: false,
 		},
 		{
 			name:         "Wrong rebuild value",
 			method:       http.MethodPost,
 			body:         `{"rebuild": "false"}`,
 			expectStatus: http.StatusBadRequest,
+			waitForAsync: false,
+		},
+		{
+			name:         "Valid rebuild request",
+			method:       http.MethodPost,
+			body:         `{"rebuild": "true"}`,
+			expectStatus: http.StatusOK,
+			waitForAsync: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.waitForAsync {
+				testMutex.Lock()
+				defer testMutex.Unlock()
+			}
+
 			req := httptest.NewRequest(tt.method, "/rebuild", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
@@ -563,6 +611,10 @@ func TestRebuildHandler(t *testing.T) {
 
 			if rec.Code != tt.expectStatus {
 				t.Errorf("Status = %d, expected %d", rec.Code, tt.expectStatus)
+			}
+
+			if tt.waitForAsync {
+				waitForRebuildComplete(t, 2*time.Second)
 			}
 		})
 	}
@@ -629,6 +681,9 @@ func TestIsPermissionDenied(t *testing.T) {
 }
 
 func TestPerformSearchTimeout(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
 	setupLargeTestCache()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
@@ -643,6 +698,9 @@ func TestPerformSearchTimeout(t *testing.T) {
 }
 
 func TestPerformSearch(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
 	setupTestCache()
 
 	tests := []struct {

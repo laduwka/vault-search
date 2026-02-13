@@ -30,21 +30,23 @@ type Cache struct {
 }
 
 func rebuildCache() error {
-	if !atomic.CompareAndSwapInt32(&cache.isRebuilding, 0, 1) {
+	c := cache
+	if !atomic.CompareAndSwapInt32(&c.isRebuilding, 0, 1) {
 		logger.Info("Cache rebuild is already in progress")
 		return nil
 	}
-	defer atomic.StoreInt32(&cache.isRebuilding, 0)
+	defer atomic.StoreInt32(&c.isRebuilding, 0)
 
-	cache.Lock()
-	cache.buildStartTime = time.Now()
-	cache.Unlock()
+	c.Lock()
+	c.buildStartTime = time.Now()
+	c.Unlock()
 
 	logger.Info("Starting cache rebuild")
 
 	tempCache := make(map[string]*SecretKeys)
 	pathsCh := make(chan string, 1000)
 	errCh := make(chan error, 1)
+	listingResultCh := make(chan error, 1)
 
 	var wg sync.WaitGroup
 
@@ -55,12 +57,13 @@ func rebuildCache() error {
 		close(pathsCh)
 	}()
 
-	var listingErr error
 	go func() {
 		wg.Wait()
 		select {
-		case listingErr = <-errCh:
+		case err := <-errCh:
+			listingResultCh <- err
 		default:
+			listingResultCh <- nil
 		}
 	}()
 
@@ -69,7 +72,7 @@ func rebuildCache() error {
 
 	totalSecrets := int64(0)
 	totalKeys := int64(0)
-	atomic.StoreInt64(&cache.fetchedSecrets, 0)
+	atomic.StoreInt64(&c.fetchedSecrets, 0)
 
 	eg, ctx := errgroup.WithContext(context.Background())
 
@@ -118,7 +121,7 @@ func rebuildCache() error {
 				totalKeys += int64(len(allKeys))
 				mu.Unlock()
 
-				fetched := atomic.AddInt64(&cache.fetchedSecrets, 1)
+				fetched := atomic.AddInt64(&c.fetchedSecrets, 1)
 				if fetched%100 == 0 || fetched == totalSecrets {
 					logger.WithFields(logrus.Fields{
 						"fetched_secrets": fetched,
@@ -135,18 +138,19 @@ func rebuildCache() error {
 		logger.WithError(err).Error("Error during cache rebuild")
 	}
 
+	listingErr := <-listingResultCh
 	if listingErr != nil {
 		logger.WithError(listingErr).Error("Error during listing secrets")
 		return listingErr
 	}
 
-	atomic.StoreInt64(&cache.totalSecrets, totalSecrets)
+	atomic.StoreInt64(&c.totalSecrets, totalSecrets)
 
-	cache.Lock()
-	cache.data = tempCache
-	cache.buildEndTime = time.Now()
-	cache.totalKeys = totalKeys
-	cache.Unlock()
+	c.Lock()
+	c.data = tempCache
+	c.buildEndTime = time.Now()
+	c.totalKeys = totalKeys
+	c.Unlock()
 
 	logger.WithField("total_keys", totalKeys).Info("Cache rebuild completed")
 	return nil

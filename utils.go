@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 	"unsafe"
@@ -59,48 +58,6 @@ func estimateSliceSize(slice []string) uint64 {
 	size += uint64(unsafe.Sizeof(slice))
 	for _, s := range slice {
 		size += uint64(len(s))
-	}
-	return size
-}
-
-func estimateValueSize(value interface{}) uint64 {
-	var size uint64
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.String:
-		size += uint64(len(v.String()))
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		size += uint64(unsafe.Sizeof(v.Int()))
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		size += uint64(unsafe.Sizeof(v.Uint()))
-	case reflect.Float32, reflect.Float64:
-		size += uint64(unsafe.Sizeof(v.Float()))
-	case reflect.Bool:
-		size += uint64(unsafe.Sizeof(v.Bool()))
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			size += estimateValueSize(v.Index(i).Interface())
-		}
-	case reflect.Map:
-		if m, ok := v.Interface().(map[string]interface{}); ok {
-			size += estimateMapSize(m)
-		}
-	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			size += estimateValueSize(v.Field(i).Interface())
-		}
-	default:
-		size += uint64(unsafe.Sizeof(value))
-	}
-	return size
-}
-
-func estimateMapSize(m map[string]interface{}) uint64 {
-	var size uint64
-	size += uint64(unsafe.Sizeof(m))
-	for k, v := range m {
-		size += uint64(len(k))
-		size += estimateValueSize(v)
 	}
 	return size
 }
