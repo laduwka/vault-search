@@ -1,0 +1,6 @@
+vault-search
+.git
+.gitignore
+*.md
+*.log
+tmp/
