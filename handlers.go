@@ -13,8 +13,6 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-const searchTimeout = 5 * time.Second
-
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(data); err != nil {
@@ -52,7 +50,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), searchTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), cfg.SearchTimeout)
 	defer cancel()
 
 	result, err := performSearch(params, regex, ctx)

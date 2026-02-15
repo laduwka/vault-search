@@ -21,6 +21,7 @@ type Config struct {
 	LogLevel           string
 	LogFilePath        string
 	VaultTimeout       time.Duration
+	SearchTimeout      time.Duration
 }
 
 var (
@@ -49,6 +50,7 @@ func loadConfig() *Config {
 	}
 
 	vaultTimeout := parseDurationEnv("VAULT_TIMEOUT", 30*time.Second)
+	searchTimeout := parseDurationEnv("SEARCH_TIMEOUT", 5*time.Second)
 
 	return &Config{
 		VaultAddress:       getEnv("VAULT_ADDR", "https://vault.offline.shelopes.com"),
@@ -59,6 +61,7 @@ func loadConfig() *Config {
 		LogLevel:           logLevel,
 		LogFilePath:        logFilePath,
 		VaultTimeout:       vaultTimeout,
+		SearchTimeout:      searchTimeout,
 	}
 }
 
