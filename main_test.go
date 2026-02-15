@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -940,6 +941,7 @@ func TestPerformSearchRegexp(t *testing.T) {
 }
 
 func setupTestCache() {
+	atomic.StoreInt32(&cache.isRebuilding, 0)
 	cache.Lock()
 	cache.data = map[string]*SecretKeys{
 		"prod/db/credentials": {

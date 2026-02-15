@@ -106,7 +106,9 @@ func setupVaultClient() *api.Client {
 
 func closeLogger() {
 	if logFile != nil {
-		logFile.Close()
+		if err := logFile.Close(); err != nil {
+			logger.Errorf("Failed to close log file: %v", err)
+		}
 	}
 }
 

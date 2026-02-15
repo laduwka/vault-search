@@ -29,7 +29,7 @@ type Cache struct {
 	totalSecrets    int64
 	fetchedSecrets  int64
 	totalKeys       int64
-	cachedSizeBytes int64
+	cachedSizeBytes uint64
 }
 
 func rebuildCache(ctx context.Context) error {
@@ -164,7 +164,7 @@ func rebuildCache(ctx context.Context) error {
 	c.buildEndTime = time.Now()
 	c.Unlock()
 	atomic.StoreInt64(&c.totalKeys, totalKeys)
-	atomic.StoreInt64(&c.cachedSizeBytes, int64(estimateCacheSize(tempCache)))
+	atomic.StoreUint64(&c.cachedSizeBytes, estimateCacheSize(tempCache))
 
 	logger.WithField("total_keys", totalKeys).Info("Cache rebuild completed")
 	return nil

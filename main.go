@@ -34,7 +34,9 @@ func main() {
 		logger.Errorf("Initial cache build failed, shutting down: %v", err)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(shutdownCtx)
+		if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Errorf("HTTP server Shutdown: %v", shutdownErr)
+		}
 		logger.Fatalf("Vault may be unreachable: %v", err)
 	}
 

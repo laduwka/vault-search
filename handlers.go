@@ -24,7 +24,9 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	w.Write(buf.Bytes())
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		logger.Errorf("Failed to write response: %v", err)
+	}
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
@@ -121,7 +123,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 
 	buildDurationStr := humanReadableDuration(buildDuration)
 	cacheAgeStr := humanReadableDuration(cacheAge)
-	cacheSizeHumanReadable := humanize.Bytes(uint64(atomic.LoadInt64(&cache.cachedSizeBytes)))
+	cacheSizeHumanReadable := humanize.Bytes(atomic.LoadUint64(&cache.cachedSizeBytes))
 
 	totalSecrets := atomic.LoadInt64(&cache.totalSecrets)
 	fetchedSecrets := atomic.LoadInt64(&cache.fetchedSecrets)
