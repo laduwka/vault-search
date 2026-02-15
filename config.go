@@ -6,6 +6,7 @@ import (
 	"path"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/sirupsen/logrus"
@@ -19,6 +20,7 @@ type Config struct {
 	MaxGoroutines      int
 	LogLevel           string
 	LogFilePath        string
+	VaultTimeout       time.Duration
 }
 
 var (
@@ -46,6 +48,8 @@ func loadConfig() *Config {
 		maxGoroutines = 10
 	}
 
+	vaultTimeout := parseDurationEnv("VAULT_TIMEOUT", 30*time.Second)
+
 	return &Config{
 		VaultAddress:       getEnv("VAULT_ADDR", "https://vault.offline.shelopes.com"),
 		VaultToken:         os.Getenv("VAULT_TOKEN"),
@@ -54,6 +58,7 @@ func loadConfig() *Config {
 		MaxGoroutines:      maxGoroutines,
 		LogLevel:           logLevel,
 		LogFilePath:        logFilePath,
+		VaultTimeout:       vaultTimeout,
 	}
 }
 
@@ -85,6 +90,7 @@ func setupLogger() *logrus.Logger {
 func setupVaultClient() *api.Client {
 	config := api.DefaultConfig()
 	config.Address = cfg.VaultAddress
+	config.Timeout = cfg.VaultTimeout
 
 	client, err := api.NewClient(config)
 	if err != nil {
@@ -107,4 +113,16 @@ func getEnv(key, defaultValue string) string {
 		return defaultValue
 	}
 	return val
+}
+
+func parseDurationEnv(key string, defaultValue time.Duration) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil || d <= 0 {
+		return defaultValue
+	}
+	return d
 }

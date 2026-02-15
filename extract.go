@@ -11,7 +11,7 @@ import (
 const maxNestedDepth = 10
 
 func extractKeysFromValue(data map[string]interface{}, logEntry *logrus.Entry) []string {
-	keys := make([]string, 0, len(data))
+	keys := make([]string, 0, len(data)*4)
 	for key := range data {
 		keys = append(keys, key)
 		value := data[key]
@@ -41,12 +41,25 @@ func extractNestedKeys(value interface{}, keys *[]string, logEntry *logrus.Entry
 }
 
 func looksLikeJSON(s string) bool {
-	trimmed := strings.TrimSpace(s)
-	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func looksLikeYAML(s string) bool {
-	return strings.Contains(s, ":") && strings.Contains(s, "\n")
+	if len(s) < 4 {
+		return false
+	}
+	hasColonSpace := strings.Contains(s, ": ") || strings.Contains(s, ":\n")
+	return hasColonSpace && strings.Contains(s, "\n")
 }
 
 func extractKeysFromJSON(data []byte, keys *[]string, logEntry *logrus.Entry, depth int) {

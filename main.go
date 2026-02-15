@@ -14,13 +14,9 @@ var version = "dev"
 func main() {
 	logger.Infof("Starting the application version=%s", version)
 
-	rebuildWg.Add(1)
-	go func() {
-		defer rebuildWg.Done()
-		if err := rebuildCache(); err != nil {
-			logger.Errorf("Initial cache build failed: %v", err)
-		}
-	}()
+	if err := rebuildCache(context.Background()); err != nil {
+		logger.Fatalf("Initial cache build failed, Vault may be unreachable: %v", err)
+	}
 
 	http.HandleFunc("/search", searchHandler)
 	http.HandleFunc("/status", statusHandler)

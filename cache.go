@@ -22,16 +22,17 @@ type SecretKeys struct {
 
 type Cache struct {
 	sync.RWMutex
-	data           map[string]*SecretKeys
-	buildStartTime time.Time
-	buildEndTime   time.Time
-	isRebuilding   int32
-	totalSecrets   int64
-	fetchedSecrets int64
-	totalKeys      int64
+	data            map[string]*SecretKeys
+	buildStartTime  time.Time
+	buildEndTime    time.Time
+	isRebuilding    int32
+	totalSecrets    int64
+	fetchedSecrets  int64
+	totalKeys       int64
+	cachedSizeBytes int64
 }
 
-func rebuildCache() error {
+func rebuildCache(ctx context.Context) error {
 	c := cache
 	if !atomic.CompareAndSwapInt32(&c.isRebuilding, 0, 1) {
 		logger.Info("Cache rebuild is already in progress")
@@ -45,14 +46,15 @@ func rebuildCache() error {
 
 	logger.Info("Starting cache rebuild")
 
-	tempCache := make(map[string]*SecretKeys)
+	prevTotal := atomic.LoadInt64(&c.totalSecrets)
+	tempCache := make(map[string]*SecretKeys, prevTotal)
 	pathsCh := make(chan string, 1000)
 	errCh := make(chan error, 1)
 	listingResultCh := make(chan error, 1)
 
 	var wg sync.WaitGroup
 
-	listCtx, listCancel := context.WithCancel(context.Background())
+	listCtx, listCancel := context.WithCancel(ctx)
 	defer listCancel()
 
 	wg.Add(1)
@@ -79,7 +81,7 @@ func rebuildCache() error {
 	totalKeys := int64(0)
 	atomic.StoreInt64(&c.fetchedSecrets, 0)
 
-	eg, ctx := errgroup.WithContext(context.Background())
+	eg, egCtx := errgroup.WithContext(ctx)
 
 	for secretPath := range pathsCh {
 		atomic.AddInt64(&totalSecrets, 1)
@@ -88,13 +90,13 @@ func rebuildCache() error {
 		eg.Go(func() error {
 			defer func() { <-sem }()
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-egCtx.Done():
+				return egCtx.Err()
 			default:
 				logEntry := logger.WithField("secret_path", secretPath)
 				logEntry.Debug("Fetching secret")
 
-				secret, err := vaultClient.Logical().Read(fmt.Sprintf("%s/data/%s", cfg.VaultMountPoint, secretPath))
+				secret, err := vaultClient.Logical().ReadWithContext(egCtx, fmt.Sprintf("%s/data/%s", cfg.VaultMountPoint, secretPath))
 				if err != nil {
 					if isPermissionDenied(err) {
 						logEntry.WithError(err).Warn("Access denied for secret")
@@ -140,14 +142,19 @@ func rebuildCache() error {
 		})
 	}
 
-	if err := eg.Wait(); err != nil {
-		logger.WithError(err).Error("Error during cache rebuild")
+	egErr := eg.Wait()
+	if egErr != nil {
+		logger.WithError(egErr).Error("Error during cache rebuild")
 	}
 
 	listingErr := <-listingResultCh
 	if listingErr != nil {
 		logger.WithError(listingErr).Error("Error during listing secrets")
 		return listingErr
+	}
+
+	if egErr != nil {
+		return egErr
 	}
 
 	atomic.StoreInt64(&c.totalSecrets, atomic.LoadInt64(&totalSecrets))
@@ -157,6 +164,7 @@ func rebuildCache() error {
 	c.buildEndTime = time.Now()
 	c.Unlock()
 	atomic.StoreInt64(&c.totalKeys, totalKeys)
+	atomic.StoreInt64(&c.cachedSizeBytes, int64(estimateCacheSize(tempCache)))
 
 	logger.WithField("total_keys", totalKeys).Info("Cache rebuild completed")
 	return nil
@@ -172,7 +180,7 @@ func listAllSecrets(ctx context.Context, currentPath string, pathsCh chan<- stri
 	default:
 	}
 
-	secretList, err := vaultClient.Logical().List(fmt.Sprintf("%s/metadata/%s", cfg.VaultMountPoint, currentPath))
+	secretList, err := vaultClient.Logical().ListWithContext(ctx, fmt.Sprintf("%s/metadata/%s", cfg.VaultMountPoint, currentPath))
 	if err != nil {
 		logEntry.WithError(err).Error("Failed to list secrets at path")
 		select {
@@ -240,7 +248,12 @@ func isPermissionDenied(err error) bool {
 }
 
 func buildSearchString(path string, keys []string) string {
+	size := len(path) + 1
+	for _, key := range keys {
+		size += len(key) + 1
+	}
 	var sb strings.Builder
+	sb.Grow(size)
 	sb.WriteString(strings.ToLower(path))
 	sb.WriteString(" ")
 	for _, key := range keys {

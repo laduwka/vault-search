@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -29,16 +28,20 @@ func performSearch(params *SearchParams, regex *regexp.Regexp, ctx context.Conte
 
 	var contentMatches []string
 	var pathMatches []string
-	var mu sync.Mutex
 
 	cache.RLock()
 	defer cache.RUnlock()
 
+	estimatedCap := len(cache.data) / 10
+	if estimatedCap < 8 {
+		estimatedCap = 8
+	}
+
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	if params.Term != "" || params.Regexp != "" {
-		contentMatches = make([]string, 0)
 		eg.Go(func() error {
+			local := make([]string, 0, estimatedCap)
 			for secretPath, secretKeys := range cache.data {
 				select {
 				case <-egCtx.Done():
@@ -47,18 +50,17 @@ func performSearch(params *SearchParams, regex *regexp.Regexp, ctx context.Conte
 				}
 
 				if matchSecret(secretPath, secretKeys, params, regex) {
-					mu.Lock()
-					contentMatches = append(contentMatches, secretPath)
-					mu.Unlock()
+					local = append(local, secretPath)
 				}
 			}
+			contentMatches = local
 			return nil
 		})
 	}
 
 	if params.InPath != "" {
-		pathMatches = make([]string, 0)
 		eg.Go(func() error {
+			local := make([]string, 0, estimatedCap)
 			for secretPath := range cache.data {
 				select {
 				case <-egCtx.Done():
@@ -67,11 +69,10 @@ func performSearch(params *SearchParams, regex *regexp.Regexp, ctx context.Conte
 				}
 
 				if strings.Contains(secretPath, params.InPath) {
-					mu.Lock()
-					pathMatches = append(pathMatches, secretPath)
-					mu.Unlock()
+					local = append(local, secretPath)
 				}
 			}
+			pathMatches = local
 			return nil
 		})
 	}

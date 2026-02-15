@@ -123,8 +123,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 
 	buildDurationStr := humanReadableDuration(buildDuration)
 	cacheAgeStr := humanReadableDuration(cacheAge)
-	cacheSizeBytes := estimateCacheSize(cache.data)
-	cacheSizeHumanReadable := humanize.Bytes(cacheSizeBytes)
+	cacheSizeHumanReadable := humanize.Bytes(uint64(atomic.LoadInt64(&cache.cachedSizeBytes)))
 
 	totalSecrets := atomic.LoadInt64(&cache.totalSecrets)
 	fetchedSecrets := atomic.LoadInt64(&cache.fetchedSecrets)
@@ -175,7 +174,7 @@ func rebuildHandler(w http.ResponseWriter, r *http.Request) {
 	rebuildWg.Add(1)
 	go func() {
 		defer rebuildWg.Done()
-		if err := rebuildCache(); err != nil {
+		if err := rebuildCache(context.Background()); err != nil {
 			logger.Errorf("Cache rebuild failed: %v", err)
 		}
 	}()
