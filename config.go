@@ -27,6 +27,7 @@ var (
 	vaultClient *api.Client
 	cache       *Cache
 	rebuildWg   sync.WaitGroup
+	logFile     *os.File
 )
 
 func init() {
@@ -69,11 +70,12 @@ func setupLogger() *logrus.Logger {
 		if err := os.MkdirAll(path.Dir(cfg.LogFilePath), 0750); err != nil {
 			log.Fatalf("Failed to create log directory: %v", err)
 		}
-		file, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			log.Fatalf("Failed to open log file: %v", err)
 		}
-		mw := io.MultiWriter(os.Stdout, file)
+		logFile = f
+		mw := io.MultiWriter(os.Stdout, f)
 		log.SetOutput(mw)
 	}
 
@@ -91,6 +93,12 @@ func setupVaultClient() *api.Client {
 
 	client.SetToken(cfg.VaultToken)
 	return client
+}
+
+func closeLogger() {
+	if logFile != nil {
+		logFile.Close()
+	}
 }
 
 func getEnv(key, defaultValue string) string {

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var version string
+var version = "dev"
 
 func main() {
 	logger.Infof("Starting the application version=%s", version)
@@ -38,7 +38,9 @@ func main() {
 		<-sigCh
 
 		logger.Info("Shutdown signal received")
-		if err := server.Shutdown(context.Background()); err != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Errorf("HTTP server Shutdown: %v", err)
 		}
 		close(idleConnsClosed)
@@ -51,4 +53,5 @@ func main() {
 
 	<-idleConnsClosed
 	logger.Info("Application has shut down gracefully")
+	closeLogger()
 }

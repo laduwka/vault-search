@@ -113,7 +113,7 @@ func TestExtractKeysFromJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractKeysFromJSON([]byte(tt.jsonStr), &keys, logEntry)
+			extractKeysFromJSON([]byte(tt.jsonStr), &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractKeysFromJSON() = %v, expected to contain %v", keys, tt.expected)
 			}
@@ -152,7 +152,7 @@ func TestExtractKeysFromYAML(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractKeysFromYAML([]byte(tt.yamlStr), &keys, logEntry)
+			extractKeysFromYAML([]byte(tt.yamlStr), &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractKeysFromYAML() = %v, expected to contain %v", keys, tt.expected)
 			}
@@ -198,7 +198,7 @@ func TestExtractNestedKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractNestedKeys(tt.value, &keys, logEntry)
+			extractNestedKeys(tt.value, &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractNestedKeys() = %v, expected to contain %v", keys, tt.expected)
 			}

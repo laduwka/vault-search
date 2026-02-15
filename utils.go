@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unsafe"
 )
 
 func humanReadableDuration(d time.Duration) string {
@@ -39,25 +38,26 @@ func roundDurationToTenSeconds(d time.Duration) time.Duration {
 	return time.Duration(roundedSeconds) * time.Second
 }
 
+const (
+	mapEntryOverhead = 100 // approximate per-entry overhead for Go map buckets
+	stringHeaderSize = 16  // string header (pointer + length)
+	sliceHeaderSize  = 24  // slice header (pointer + length + capacity)
+	pointerSize      = 8   // pointer to SecretKeys
+)
+
 func estimateCacheSize(cacheData map[string]*SecretKeys) uint64 {
 	var size uint64
-	size += uint64(unsafe.Sizeof(cacheData))
 	for path, secretKeys := range cacheData {
-		size += uint64(len(path))
-		size += uint64(unsafe.Sizeof(secretKeys))
+		size += mapEntryOverhead
+		size += stringHeaderSize + uint64(len(path))
+		size += pointerSize
 		if secretKeys != nil {
-			size += estimateSliceSize(secretKeys.AllKeys)
-			size += uint64(len(secretKeys.SearchString))
+			size += stringHeaderSize + uint64(len(secretKeys.SearchString))
+			size += sliceHeaderSize
+			for _, s := range secretKeys.AllKeys {
+				size += stringHeaderSize + uint64(len(s))
+			}
 		}
-	}
-	return size
-}
-
-func estimateSliceSize(slice []string) uint64 {
-	var size uint64
-	size += uint64(unsafe.Sizeof(slice))
-	for _, s := range slice {
-		size += uint64(len(s))
 	}
 	return size
 }
