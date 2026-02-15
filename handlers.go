@@ -123,6 +123,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
+		"version":             version,
 		"cache_age":           cacheAgeStr,
 		"build_duration":      buildDurationStr,
 		"is_rebuilding":       isRebuilding,
@@ -166,7 +167,9 @@ func rebuildHandler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("Received request to rebuild cache")
 
+	rebuildWg.Add(1)
 	go func() {
+		defer rebuildWg.Done()
 		if err := rebuildCache(); err != nil {
 			logger.Errorf("Cache rebuild failed: %v", err)
 		}

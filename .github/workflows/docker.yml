@@ -54,6 +54,10 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
+      - name: Read version
+        id: version
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         id: push
         uses: docker/build-push-action@v5
@@ -66,6 +70,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
 
       - name: Sign image with Cosign
         if: github.event_name != 'pull_request'

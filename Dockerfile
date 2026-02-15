@@ -9,7 +9,8 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o vault-search .
+ARG VERSION
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-X main.version=${VERSION} -w -s" -o vault-search .
 
 FROM alpine:3.19
 

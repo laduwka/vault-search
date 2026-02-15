@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,29 +17,32 @@ import (
 )
 
 var testMutex sync.Mutex
-var originalCache *Cache
+var originalCacheData map[string]*SecretKeys
 
 func TestMain(m *testing.M) {
-	originalCache = cache
+	originalCacheData = cache.data
 	os.Exit(m.Run())
 }
 
 func restoreCache() {
-	cache = originalCache
+	cache.Lock()
+	cache.data = originalCacheData
+	cache.Unlock()
 }
 
 func waitForRebuildComplete(t *testing.T, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		cache.RLock()
-		done := atomic.LoadInt32(&cache.isRebuilding) == 0
-		cache.RUnlock()
-		if done {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		rebuildWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		t.Log("Warning: rebuild did not complete within timeout")
 	}
-	t.Log("Warning: rebuild did not complete within timeout")
 }
 
 func TestExtractKeysFromValue(t *testing.T) {
@@ -559,6 +561,9 @@ func TestSearchHandlerShowUI(t *testing.T) {
 }
 
 func TestRebuildHandler(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+
 	tests := []struct {
 		name         string
 		method       string
@@ -598,11 +603,6 @@ func TestRebuildHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.waitForAsync {
-				testMutex.Lock()
-				defer testMutex.Unlock()
-			}
-
 			req := httptest.NewRequest(tt.method, "/rebuild", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
@@ -740,22 +740,22 @@ func TestPerformSearch(t *testing.T) {
 }
 
 func setupTestCache() {
-	cache = &Cache{
-		data: map[string]*SecretKeys{
-			"prod/db/credentials": {
-				AllKeys:      []string{"username", "password", "host"},
-				SearchString: "prod/db/credentials username password host ",
-			},
-			"prod/api/keys": {
-				AllKeys:      []string{"api_key", "secret_key"},
-				SearchString: "prod/api/keys api_key secret_key ",
-			},
-			"staging/db/config": {
-				AllKeys:      []string{"host", "port", "password"},
-				SearchString: "staging/db/config host port password ",
-			},
+	cache.Lock()
+	cache.data = map[string]*SecretKeys{
+		"prod/db/credentials": {
+			AllKeys:      []string{"username", "password", "host"},
+			SearchString: "prod/db/credentials username password host ",
+		},
+		"prod/api/keys": {
+			AllKeys:      []string{"api_key", "secret_key"},
+			SearchString: "prod/api/keys api_key secret_key ",
+		},
+		"staging/db/config": {
+			AllKeys:      []string{"host", "port", "password"},
+			SearchString: "staging/db/config host port password ",
 		},
 	}
+	cache.Unlock()
 }
 
 func setupLargeTestCache() {
@@ -767,7 +767,9 @@ func setupLargeTestCache() {
 			SearchString: path + " key1 key2 ",
 		}
 	}
-	cache = &Cache{data: data}
+	cache.Lock()
+	cache.data = data
+	cache.Unlock()
 }
 
 func containsAllKeys(keys []string, expected []string) bool {

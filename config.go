@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"sync"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/sirupsen/logrus"
@@ -25,6 +26,7 @@ var (
 	cfg         *Config
 	vaultClient *api.Client
 	cache       *Cache
+	rebuildWg   sync.WaitGroup
 )
 
 func init() {

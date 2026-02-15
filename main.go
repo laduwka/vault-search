@@ -9,10 +9,14 @@ import (
 	"time"
 )
 
-func main() {
-	logger.Info("Starting the application")
+var version string
 
+func main() {
+	logger.Infof("Starting the application version=%s", version)
+
+	rebuildWg.Add(1)
 	go func() {
+		defer rebuildWg.Done()
 		if err := rebuildCache(); err != nil {
 			logger.Errorf("Initial cache build failed: %v", err)
 		}

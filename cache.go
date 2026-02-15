@@ -149,8 +149,8 @@ func rebuildCache() error {
 	c.Lock()
 	c.data = tempCache
 	c.buildEndTime = time.Now()
-	c.totalKeys = totalKeys
 	c.Unlock()
+	atomic.StoreInt64(&c.totalKeys, totalKeys)
 
 	logger.WithField("total_keys", totalKeys).Info("Cache rebuild completed")
 	return nil
