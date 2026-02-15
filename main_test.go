@@ -434,6 +434,35 @@ func TestDetermineMatches(t *testing.T) {
 	}
 }
 
+func TestMatchInPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretPath string
+		inPath     string
+		expected   bool
+	}{
+		{"exact match", "prod", "prod", true},
+		{"starts with segment", "prod/db/creds", "prod", true},
+		{"middle segment", "staging/prod/db", "prod", true},
+		{"ends with segment", "staging/prod", "prod", true},
+		{"substring in word - no match", "game-products/rabbitmq", "prod", false},
+		{"prefix of segment - no match", "production/db", "prod", false},
+		{"suffix of segment - no match", "staging/hotprod/db", "prod", false},
+		{"multi-segment inPath", "staging/prod/db/creds", "prod/db", true},
+		{"multi-segment at start", "prod/db/creds", "prod/db", true},
+		{"no match at all", "staging/dev/config", "prod", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchInPath(tt.secretPath, tt.inPath)
+			if result != tt.expected {
+				t.Errorf("matchInPath(%q, %q) = %v, expected %v", tt.secretPath, tt.inPath, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestBuildSearchString(t *testing.T) {
 	path := "prod/db/credentials"
 	keys := []string{"username", "password", "host"}

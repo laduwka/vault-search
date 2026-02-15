@@ -68,7 +68,7 @@ func performSearch(params *SearchParams, regex *regexp.Regexp, ctx context.Conte
 				default:
 				}
 
-				if strings.Contains(secretPath, params.InPath) {
+				if matchInPath(secretPath, params.InPath) {
 					local = append(local, secretPath)
 				}
 			}
@@ -83,12 +83,10 @@ func performSearch(params *SearchParams, regex *regexp.Regexp, ctx context.Conte
 
 	matches := determineMatches(params, contentMatches, pathMatches)
 
-	if params.Sort == "asc" || params.Sort == "desc" {
-		sort.Strings(matches)
-		if params.Sort == "desc" {
-			for i, j := 0, len(matches)-1; i < j; i, j = i+1, j-1 {
-				matches[i], matches[j] = matches[j], matches[i]
-			}
+	sort.Strings(matches)
+	if params.Sort == "desc" {
+		for i, j := 0, len(matches)-1; i < j; i, j = i+1, j-1 {
+			matches[i], matches[j] = matches[j], matches[i]
 		}
 	}
 
@@ -114,6 +112,19 @@ func matchSecret(path string, keys *SecretKeys, params *SearchParams, regex *reg
 	}
 
 	return false
+}
+
+func matchInPath(secretPath, inPath string) bool {
+	if secretPath == inPath {
+		return true
+	}
+	if strings.HasPrefix(secretPath, inPath+"/") {
+		return true
+	}
+	if strings.HasSuffix(secretPath, "/"+inPath) {
+		return true
+	}
+	return strings.Contains(secretPath, "/"+inPath+"/")
 }
 
 func determineMatches(params *SearchParams, contentMatches, pathMatches []string) []string {
