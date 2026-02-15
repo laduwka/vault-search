@@ -120,5 +120,4 @@ jobs:
           cosign verify \
             --certificate-identity="https://github.com/${{ github.repository }}/.github/workflows/docker.yml@${{ github.ref }}" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            --annotation "repo=${{ github.repository }}" \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
