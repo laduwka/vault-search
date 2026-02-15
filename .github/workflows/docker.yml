@@ -79,8 +79,8 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign sign --yes \
-            --annotations repo=${{ github.repository }} \
-            --annotations workflow=${{ github.workflow }} \
+            -a "repo=${{ github.repository }}" \
+            -a "workflow=${{ github.workflow }}" \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
 
       - name: Generate artifact attestation
@@ -119,5 +119,5 @@ jobs:
           cosign verify \
             --certificate-identity="https://github.com/${{ github.repository }}/.github/workflows/docker.yml@${{ github.ref }}" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            --annotation repo=${{ github.repository }} \
+            --annotation "repo=${{ github.repository }}" \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
