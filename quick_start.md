@@ -18,6 +18,33 @@
 docker pull ghcr.io/laduwka/vault-search:latest
 ```
 
+### (Опционально) Проверка подписи образа
+
+Все Docker-образы подписаны с помощью [Cosign](https://docs.sigstore.dev/cosign/overview/). Вы можете проверить подлинность образа перед запуском:
+
+```bash
+# Установите cosign (macOS)
+brew install cosign
+
+# Или Linux
+go install github.com/sigstore/cosign/v2/cmd/cosign@latest
+
+# Проверьте подпись
+cosign verify \
+  --certificate-identity-regexp="^https://github.com/laduwka/vault-search/.github/workflows/" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+  ghcr.io/laduwka/vault-search:latest
+```
+
+Успешная проверка покажет:
+```
+Verification for ghcr.io/laduwka/vault-search:latest --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+  - Any certificates were verified against the Fulcio roots.
+```
+
 ### Шаг 2: Запустите контейнер
 
 ```bash

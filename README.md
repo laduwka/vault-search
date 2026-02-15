@@ -70,16 +70,68 @@ Pre-built images are available on GitHub Container Registry:
 
 ```bash
 # Pull the latest image
-docker pull ghcr.io/YOUR_USERNAME/vault-search:latest
+docker pull ghcr.io/laduwka/vault-search:latest
 
 # Pull a specific version
-docker pull ghcr.io/YOUR_USERNAME/vault-search:v0.1.0
+docker pull ghcr.io/laduwka/vault-search:v0.1.0
 
 # Run the container
 docker run --rm -p 8080:8080 \
   -e VAULT_TOKEN="your-vault-token" \
   -e VAULT_ADDR="https://your-vault.example.com" \
-  ghcr.io/YOUR_USERNAME/vault-search:latest
+  ghcr.io/laduwka/vault-search:latest
+```
+
+### Verify Docker Image Signature
+
+All Docker images are signed with [Cosign](https://docs.sigstore.dev/cosign/overview/) using keyless signing via Sigstore. You can verify the image signature before running:
+
+#### Install Cosign
+
+```bash
+# macOS
+brew install cosign
+
+# Linux
+go install github.com/sigstore/cosign/v2/cmd/cosign@latest
+
+# Or download from https://github.com/sigstore/cosign/releases
+```
+
+#### Verify Image
+
+```bash
+# Get the image digest
+DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/laduwka/vault-search:latest | cut -d'@' -f2)
+
+# Verify signature
+cosign verify \
+  --certificate-identity-regexp="^https://github.com/laduwka/vault-search/.github/workflows/" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+  ghcr.io/laduwka/vault-search@sha256:$DIGEST
+```
+
+#### Verify with Specific Version
+
+```bash
+# Pull specific version
+docker pull ghcr.io/laduwka/vault-search:v0.1.0
+
+# Verify
+cosign verify \
+  --certificate-identity-regexp="^https://github.com/laduwka/vault-search/.github/workflows/" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+  ghcr.io/laduwka/vault-search:v0.1.0
+```
+
+Successful verification output:
+```
+Verification for ghcr.io/laduwka/vault-search@sha256:... --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The claims were spread
+  - The signatures were verified against the specified public key
+  - Any certificates were verified against the Fulcio roots.
 ```
 
 ### Run
