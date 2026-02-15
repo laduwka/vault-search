@@ -14,10 +14,6 @@ var version = "dev"
 func main() {
 	logger.Infof("Starting the application version=%s", version)
 
-	if err := rebuildCache(context.Background()); err != nil {
-		logger.Fatalf("Initial cache build failed, Vault may be unreachable: %v", err)
-	}
-
 	http.HandleFunc("/search", searchHandler)
 	http.HandleFunc("/status", statusHandler)
 	http.HandleFunc("/rebuild", rebuildHandler)
@@ -25,6 +21,21 @@ func main() {
 	server := &http.Server{
 		Addr:              cfg.LocalServerAddress,
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		logger.Infof("HTTP server is listening on %s", cfg.LocalServerAddress)
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			logger.Fatalf("HTTP server ListenAndServe: %v", err)
+		}
+	}()
+
+	if err := rebuildCache(context.Background()); err != nil {
+		logger.Errorf("Initial cache build failed, shutting down: %v", err)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(shutdownCtx)
+		logger.Fatalf("Vault may be unreachable: %v", err)
 	}
 
 	idleConnsClosed := make(chan struct{})
@@ -41,11 +52,6 @@ func main() {
 		}
 		close(idleConnsClosed)
 	}()
-
-	logger.Infof("HTTP server is listening on %s", cfg.LocalServerAddress)
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		logger.Fatalf("HTTP server ListenAndServe: %v", err)
-	}
 
 	<-idleConnsClosed
 	logger.Info("Application has shut down gracefully")
