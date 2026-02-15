@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,29 +19,32 @@ import (
 )
 
 var testMutex sync.Mutex
-var originalCache *Cache
+var originalCacheData map[string]*SecretKeys
 
 func TestMain(m *testing.M) {
-	originalCache = cache
+	originalCacheData = cache.data
 	os.Exit(m.Run())
 }
 
 func restoreCache() {
-	cache = originalCache
+	cache.Lock()
+	cache.data = originalCacheData
+	cache.Unlock()
 }
 
 func waitForRebuildComplete(t *testing.T, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		cache.RLock()
-		done := atomic.LoadInt32(&cache.isRebuilding) == 0
-		cache.RUnlock()
-		if done {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		rebuildWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(timeout):
+		t.Log("Warning: rebuild did not complete within timeout")
 	}
-	t.Log("Warning: rebuild did not complete within timeout")
 }
 
 func TestExtractKeysFromValue(t *testing.T) {
@@ -111,7 +115,7 @@ func TestExtractKeysFromJSON(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractKeysFromJSON([]byte(tt.jsonStr), &keys, logEntry)
+			extractKeysFromJSON([]byte(tt.jsonStr), &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractKeysFromJSON() = %v, expected to contain %v", keys, tt.expected)
 			}
@@ -150,7 +154,7 @@ func TestExtractKeysFromYAML(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractKeysFromYAML([]byte(tt.yamlStr), &keys, logEntry)
+			extractKeysFromYAML([]byte(tt.yamlStr), &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractKeysFromYAML() = %v, expected to contain %v", keys, tt.expected)
 			}
@@ -196,7 +200,7 @@ func TestExtractNestedKeys(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var keys []string
-			extractNestedKeys(tt.value, &keys, logEntry)
+			extractNestedKeys(tt.value, &keys, logEntry, 0)
 			if !containsAllKeys(keys, tt.expected) {
 				t.Errorf("extractNestedKeys() = %v, expected to contain %v", keys, tt.expected)
 			}
@@ -432,23 +436,44 @@ func TestDetermineMatches(t *testing.T) {
 	}
 }
 
+func TestMatchInPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretPath string
+		inPath     string
+		expected   bool
+	}{
+		{"exact match", "prod", "prod", true},
+		{"starts with segment", "prod/db/creds", "prod", true},
+		{"middle segment", "staging/prod/db", "prod", true},
+		{"ends with segment", "staging/prod", "prod", true},
+		{"substring in word - no match", "game-products/rabbitmq", "prod", false},
+		{"prefix of segment - no match", "production/db", "prod", false},
+		{"suffix of segment - no match", "staging/hotprod/db", "prod", false},
+		{"multi-segment inPath", "staging/prod/db/creds", "prod/db", true},
+		{"multi-segment at start", "prod/db/creds", "prod/db", true},
+		{"no match at all", "staging/dev/config", "prod", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchInPath(tt.secretPath, tt.inPath)
+			if result != tt.expected {
+				t.Errorf("matchInPath(%q, %q) = %v, expected %v", tt.secretPath, tt.inPath, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestBuildSearchString(t *testing.T) {
-	path := "prod/db/credentials"
-	keys := []string{"username", "password", "host"}
+	path := "Prod/DB/Credentials"
+	keys := []string{"Username", "Password", "Host"}
 
 	result := buildSearchString(path, keys)
+	expected := "prod/db/credentials username password host "
 
-	if !strings.Contains(result, "prod/db/credentials") {
-		t.Error("Search string should contain path")
-	}
-	if !strings.Contains(result, "username") {
-		t.Error("Search string should contain key 'username'")
-	}
-	if !strings.Contains(result, "password") {
-		t.Error("Search string should contain key 'password'")
-	}
-	if result != strings.ToLower(result) {
-		t.Error("Search string should be lowercase")
+	if result != expected {
+		t.Errorf("buildSearchString() = %q, expected %q", result, expected)
 	}
 }
 
@@ -505,27 +530,57 @@ func TestSearchHandlerWithSort(t *testing.T) {
 	defer restoreCache()
 	setupTestCache()
 
-	req := httptest.NewRequest(http.MethodGet, "/search?term=key&sort=asc", nil)
-	rec := httptest.NewRecorder()
+	t.Run("Ascending", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/search?term=password&sort=asc", nil)
+		rec := httptest.NewRecorder()
 
-	searchHandler(rec, req)
+		searchHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Status = %d, expected %d", rec.Code, http.StatusOK)
-		return
-	}
-
-	var response map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
-	}
-
-	matches := response["matches"].([]interface{})
-	for i := 1; i < len(matches); i++ {
-		if matches[i-1].(string) > matches[i].(string) {
-			t.Error("Results not sorted in ascending order")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Status = %d, expected %d", rec.Code, http.StatusOK)
 		}
-	}
+
+		var response map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+
+		matches := response["matches"].([]interface{})
+		if len(matches) < 2 {
+			t.Fatalf("Expected at least 2 matches to verify sort, got %d", len(matches))
+		}
+		for i := 1; i < len(matches); i++ {
+			if matches[i-1].(string) > matches[i].(string) {
+				t.Errorf("Results not sorted in ascending order: %s > %s", matches[i-1], matches[i])
+			}
+		}
+	})
+
+	t.Run("Descending", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/search?term=password&sort=desc", nil)
+		rec := httptest.NewRecorder()
+
+		searchHandler(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Status = %d, expected %d", rec.Code, http.StatusOK)
+		}
+
+		var response map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+
+		matches := response["matches"].([]interface{})
+		if len(matches) < 2 {
+			t.Fatalf("Expected at least 2 matches to verify sort, got %d", len(matches))
+		}
+		for i := 1; i < len(matches); i++ {
+			if matches[i-1].(string) < matches[i].(string) {
+				t.Errorf("Results not sorted in descending order: %s < %s", matches[i-1], matches[i])
+			}
+		}
+	})
 }
 
 func TestSearchHandlerShowUI(t *testing.T) {
@@ -550,8 +605,11 @@ func TestSearchHandlerShowUI(t *testing.T) {
 	}
 
 	matches := response["matches"].([]interface{})
-	if len(matches) > 0 {
-		url := matches[0].(string)
+	if len(matches) == 0 {
+		t.Fatal("Expected at least 1 match but got 0")
+	}
+	for _, m := range matches {
+		url := m.(string)
 		if !strings.Contains(url, "/ui/vault/secrets/") {
 			t.Errorf("Expected Vault UI URL, got %s", url)
 		}
@@ -559,6 +617,9 @@ func TestSearchHandlerShowUI(t *testing.T) {
 }
 
 func TestRebuildHandler(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+
 	tests := []struct {
 		name         string
 		method       string
@@ -598,11 +659,6 @@ func TestRebuildHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.waitForAsync {
-				testMutex.Lock()
-				defer testMutex.Unlock()
-			}
-
 			req := httptest.NewRequest(tt.method, "/rebuild", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
@@ -686,8 +742,9 @@ func TestPerformSearchTimeout(t *testing.T) {
 	defer restoreCache()
 	setupLargeTestCache()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
+	time.Sleep(2 * time.Millisecond) // ensure context expires before search starts
 
 	params := &SearchParams{Term: "test"}
 	_, err := performSearch(params, nil, ctx)
@@ -739,35 +796,182 @@ func TestPerformSearch(t *testing.T) {
 	}
 }
 
-func setupTestCache() {
-	cache = &Cache{
-		data: map[string]*SecretKeys{
-			"prod/db/credentials": {
-				AllKeys:      []string{"username", "password", "host"},
-				SearchString: "prod/db/credentials username password host ",
+func TestStatusHandler(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
+	setupTestCache()
+
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+
+	statusHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Status = %d, expected %d", rec.Code, http.StatusOK)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	requiredFields := []string{"version", "cache_age", "build_duration", "is_rebuilding", "total_keys_indexed", "total_secrets", "fetched_secrets", "progress_percentage", "cache_in_mem_size"}
+	for _, field := range requiredFields {
+		if _, ok := response[field]; !ok {
+			t.Errorf("Missing required field %q in status response", field)
+		}
+	}
+
+	if response["is_rebuilding"].(bool) != false {
+		t.Error("Expected is_rebuilding=false")
+	}
+}
+
+func TestEstimateCacheSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     map[string]*SecretKeys
+		expected uint64
+	}{
+		{
+			name:     "Empty map",
+			data:     map[string]*SecretKeys{},
+			expected: 0,
+		},
+		{
+			name: "Single entry",
+			data: map[string]*SecretKeys{
+				"prod/db": {
+					AllKeys:      []string{"user", "pass"},
+					SearchString: "prod/db user pass ",
+				},
 			},
-			"prod/api/keys": {
-				AllKeys:      []string{"api_key", "secret_key"},
-				SearchString: "prod/api/keys api_key secret_key ",
+			expected: mapEntryOverhead + stringHeaderSize + 7 + pointerSize + stringHeaderSize + 18 + sliceHeaderSize + (stringHeaderSize + 4) + (stringHeaderSize + 4),
+		},
+		{
+			name: "Nil SecretKeys",
+			data: map[string]*SecretKeys{
+				"path": nil,
 			},
-			"staging/db/config": {
-				AllKeys:      []string{"host", "port", "password"},
-				SearchString: "staging/db/config host port password ",
-			},
+			expected: mapEntryOverhead + stringHeaderSize + 4 + pointerSize,
 		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := estimateCacheSize(tt.data)
+			if result != tt.expected {
+				t.Errorf("estimateCacheSize() = %d, expected %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPerformSearchDefaultSort(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
+	setupTestCache()
+
+	ctx := context.Background()
+	params := &SearchParams{Term: "password"} // no Sort param
+	result, err := performSearch(params, nil, ctx)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if len(result.Matches) < 2 {
+		t.Fatalf("Expected at least 2 matches, got %d", len(result.Matches))
+	}
+	for i := 1; i < len(result.Matches); i++ {
+		if result.Matches[i-1] > result.Matches[i] {
+			t.Errorf("Results not sorted ascending by default: %s > %s", result.Matches[i-1], result.Matches[i])
+		}
+	}
+}
+
+func TestPerformSearchDescSort(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
+	setupTestCache()
+
+	ctx := context.Background()
+	params := &SearchParams{Term: "password", Sort: "desc"}
+	result, err := performSearch(params, nil, ctx)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if len(result.Matches) < 2 {
+		t.Fatalf("Expected at least 2 matches, got %d", len(result.Matches))
+	}
+	for i := 1; i < len(result.Matches); i++ {
+		if result.Matches[i-1] < result.Matches[i] {
+			t.Errorf("Results not sorted descending: %s < %s", result.Matches[i-1], result.Matches[i])
+		}
+	}
+}
+
+func TestPerformSearchRegexp(t *testing.T) {
+	testMutex.Lock()
+	defer testMutex.Unlock()
+	defer restoreCache()
+	setupTestCache()
+
+	ctx := context.Background()
+	regex, err := regexp.Compile("(?i)api_key")
+	if err != nil {
+		t.Fatalf("Failed to compile regex: %v", err)
+	}
+
+	params := &SearchParams{Regexp: "(?i)api_key"}
+	result, err := performSearch(params, regex, ctx)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if len(result.Matches) != 1 {
+		t.Errorf("Expected 1 match, got %d", len(result.Matches))
+	}
+	if len(result.Matches) > 0 && result.Matches[0] != "prod/api/keys" {
+		t.Errorf("Expected prod/api/keys, got %s", result.Matches[0])
+	}
+}
+
+func setupTestCache() {
+	atomic.StoreInt32(&cache.isRebuilding, 0)
+	cache.Lock()
+	cache.data = map[string]*SecretKeys{
+		"prod/db/credentials": {
+			AllKeys:      []string{"username", "password", "host"},
+			SearchString: "prod/db/credentials username password host ",
+		},
+		"prod/api/keys": {
+			AllKeys:      []string{"api_key", "secret_key"},
+			SearchString: "prod/api/keys api_key secret_key ",
+		},
+		"staging/db/config": {
+			AllKeys:      []string{"host", "port", "password"},
+			SearchString: "staging/db/config host port password ",
+		},
+	}
+	cache.Unlock()
 }
 
 func setupLargeTestCache() {
 	data := make(map[string]*SecretKeys)
 	for i := 0; i < 10000; i++ {
-		path := "path/" + string(rune(i))
-		data[path] = &SecretKeys{
+		p := fmt.Sprintf("path/%d", i)
+		data[p] = &SecretKeys{
 			AllKeys:      []string{"key1", "key2"},
-			SearchString: path + " key1 key2 ",
+			SearchString: p + " key1 key2 ",
 		}
 	}
-	cache = &Cache{data: data}
+	cache.Lock()
+	cache.data = data
+	cache.Unlock()
 }
 
 func containsAllKeys(keys []string, expected []string) bool {

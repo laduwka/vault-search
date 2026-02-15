@@ -9,14 +9,10 @@ import (
 	"time"
 )
 
-func main() {
-	logger.Info("Starting the application")
+var version = "dev"
 
-	go func() {
-		if err := rebuildCache(); err != nil {
-			logger.Errorf("Initial cache build failed: %v", err)
-		}
-	}()
+func main() {
+	logger.Infof("Starting the application version=%s", version)
 
 	http.HandleFunc("/search", searchHandler)
 	http.HandleFunc("/status", statusHandler)
@@ -27,6 +23,23 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	go func() {
+		logger.Infof("HTTP server is listening on %s", cfg.LocalServerAddress)
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			logger.Fatalf("HTTP server ListenAndServe: %v", err)
+		}
+	}()
+
+	if err := rebuildCache(context.Background()); err != nil {
+		logger.Errorf("Initial cache build failed, shutting down: %v", err)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Errorf("HTTP server Shutdown: %v", shutdownErr)
+		}
+		logger.Fatalf("Vault may be unreachable: %v", err)
+	}
+
 	idleConnsClosed := make(chan struct{})
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -34,17 +47,15 @@ func main() {
 		<-sigCh
 
 		logger.Info("Shutdown signal received")
-		if err := server.Shutdown(context.Background()); err != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Errorf("HTTP server Shutdown: %v", err)
 		}
 		close(idleConnsClosed)
 	}()
 
-	logger.Infof("HTTP server is listening on %s", cfg.LocalServerAddress)
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		logger.Fatalf("HTTP server ListenAndServe: %v", err)
-	}
-
 	<-idleConnsClosed
 	logger.Info("Application has shut down gracefully")
+	closeLogger()
 }

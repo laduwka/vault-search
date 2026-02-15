@@ -1,5 +1,7 @@
 # Vault Search
 
+**English** | [Русский](README.ru.md)
+
 A fast, secure, local tool for searching HashiCorp Vault secrets by key names and paths. Designed for SREs and DevOps engineers who need to quickly find secrets without exposing values.
 
 ## Features
@@ -73,7 +75,7 @@ Pre-built images are available on GitHub Container Registry:
 docker pull ghcr.io/laduwka/vault-search:latest
 
 # Pull a specific version
-docker pull ghcr.io/laduwka/vault-search:v0.1.0
+docker pull ghcr.io/laduwka/vault-search:v0.2.0
 
 # Run the container
 docker run --rm -p 8080:8080 \
@@ -84,7 +86,7 @@ docker run --rm -p 8080:8080 \
 
 ### Verify Docker Image Signature
 
-All Docker images are signed with [Cosign](https://docs.sigstore.dev/cosign/overview/) using keyless signing via Sigstore. You can verify the image signature before running:
+All Docker images are signed with [Cosign](https://docs.sigstore.dev/cosign/overview/) using keyless signing via Sigstore from GitHub Actions.
 
 #### Install Cosign
 
@@ -94,42 +96,45 @@ brew install cosign
 
 # Linux
 go install github.com/sigstore/cosign/v2/cmd/cosign@latest
-
-# Or download from https://github.com/sigstore/cosign/releases
 ```
 
-#### Verify Image
+#### Verify by tag (recommended)
+
+Cosign resolves the tag to a digest and verifies the signature remotely:
 
 ```bash
-# Get the image digest
-DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/laduwka/vault-search:latest | cut -d'@' -f2)
-
-# Verify signature
 cosign verify \
-  --certificate-identity-regexp="^https://github.com/laduwka/vault-search/.github/workflows/" \
+  --certificate-identity="https://github.com/laduwka/vault-search/.github/workflows/docker.yml@refs/heads/main" \
   --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-  ghcr.io/laduwka/vault-search@sha256:$DIGEST
+  --annotation repo=laduwka/vault-search \
+  ghcr.io/laduwka/vault-search:latest
 ```
 
-#### Verify with Specific Version
+#### Verify specific version tag
 
 ```bash
-# Pull specific version
-docker pull ghcr.io/laduwka/vault-search:v0.1.0
-
-# Verify
 cosign verify \
-  --certificate-identity-regexp="^https://github.com/laduwka/vault-search/.github/workflows/" \
+  --certificate-identity="https://github.com/laduwka/vault-search/.github/workflows/docker.yml@refs/tags/v0.2.0" \
   --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-  ghcr.io/laduwka/vault-search:v0.1.0
+  --annotation repo=laduwka/vault-search \
+  ghcr.io/laduwka/vault-search:v0.2.0
+```
+
+#### Verify by digest (strict pin)
+
+```bash
+cosign verify \
+  --certificate-identity="https://github.com/laduwka/vault-search/.github/workflows/docker.yml@refs/heads/main" \
+  --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+  --annotation repo=laduwka/vault-search \
+  ghcr.io/laduwka/vault-search@sha256:<digest>
 ```
 
 Successful verification output:
 ```
-Verification for ghcr.io/laduwka/vault-search@sha256:... --
+Verification for ghcr.io/laduwka/vault-search:latest --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
-  - The claims were spread
   - The signatures were verified against the specified public key
   - Any certificates were verified against the Fulcio roots.
 ```
@@ -155,7 +160,7 @@ export LOG_LEVEL="info"
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `VAULT_TOKEN` | *(required)* | Vault authentication token |
-| `VAULT_ADDR` | `https://vault.offline.shelopes.com` | Vault server address |
+| `VAULT_ADDR` | `https://your-vault.example.com` | Vault server address |
 | `VAULT_MOUNT_POINT` | `kv` | KV v2 secrets engine mount point |
 | `LOCAL_SERVER_ADDR` | `localhost:8080` | HTTP listen address |
 | `MAX_GOROUTINES` | `15` | Concurrency limit for Vault API calls |
@@ -363,7 +368,6 @@ Searches for `term=port` or `term=PASSWORD` will match this secret.
 
 - Run only on your local machine
 - Use a Vault token with minimal required permissions
-- Set `LOG_LEVEL=warn` or higher in shared environments
 - Rotate Vault tokens regularly
 
 ## Performance
@@ -448,7 +452,7 @@ go vet ./...
 #### "Search timeout exceeded"
 
 - Regex is too complex or cache is very large
-- Simplify regex or increase timeout in `handlers.go`
+- Simplify regex or increase timeout via `SEARCH_TIMEOUT` env var (e.g. `SEARCH_TIMEOUT=10s`)
 
 #### "Cache rebuild is already in progress"
 
@@ -472,7 +476,7 @@ Debug logs include:
 
 ## License
 
-MIT License
+GPL-3.0
 
 ## Contributing
 

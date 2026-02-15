@@ -5,6 +5,8 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/hashicorp/vault/api"
 	"github.com/sirupsen/logrus"
@@ -18,6 +20,8 @@ type Config struct {
 	MaxGoroutines      int
 	LogLevel           string
 	LogFilePath        string
+	VaultTimeout       time.Duration
+	SearchTimeout      time.Duration
 }
 
 var (
@@ -25,6 +29,8 @@ var (
 	cfg         *Config
 	vaultClient *api.Client
 	cache       *Cache
+	rebuildWg   sync.WaitGroup
+	logFile     *os.File
 )
 
 func init() {
@@ -43,6 +49,9 @@ func loadConfig() *Config {
 		maxGoroutines = 10
 	}
 
+	vaultTimeout := parseDurationEnv("VAULT_TIMEOUT", 30*time.Second)
+	searchTimeout := parseDurationEnv("SEARCH_TIMEOUT", 5*time.Second)
+
 	return &Config{
 		VaultAddress:       getEnv("VAULT_ADDR", "https://vault.offline.shelopes.com"),
 		VaultToken:         os.Getenv("VAULT_TOKEN"),
@@ -51,6 +60,8 @@ func loadConfig() *Config {
 		MaxGoroutines:      maxGoroutines,
 		LogLevel:           logLevel,
 		LogFilePath:        logFilePath,
+		VaultTimeout:       vaultTimeout,
+		SearchTimeout:      searchTimeout,
 	}
 }
 
@@ -67,11 +78,12 @@ func setupLogger() *logrus.Logger {
 		if err := os.MkdirAll(path.Dir(cfg.LogFilePath), 0750); err != nil {
 			log.Fatalf("Failed to create log directory: %v", err)
 		}
-		file, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		f, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			log.Fatalf("Failed to open log file: %v", err)
 		}
-		mw := io.MultiWriter(os.Stdout, file)
+		logFile = f
+		mw := io.MultiWriter(os.Stdout, f)
 		log.SetOutput(mw)
 	}
 
@@ -81,6 +93,7 @@ func setupLogger() *logrus.Logger {
 func setupVaultClient() *api.Client {
 	config := api.DefaultConfig()
 	config.Address = cfg.VaultAddress
+	config.Timeout = cfg.VaultTimeout
 
 	client, err := api.NewClient(config)
 	if err != nil {
@@ -91,10 +104,30 @@ func setupVaultClient() *api.Client {
 	return client
 }
 
+func closeLogger() {
+	if logFile != nil {
+		if err := logFile.Close(); err != nil {
+			logger.Errorf("Failed to close log file: %v", err)
+		}
+	}
+}
+
 func getEnv(key, defaultValue string) string {
 	val := os.Getenv(key)
 	if val == "" {
 		return defaultValue
 	}
 	return val
+}
+
+func parseDurationEnv(key string, defaultValue time.Duration) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(val)
+	if err != nil || d <= 0 {
+		return defaultValue
+	}
+	return d
 }

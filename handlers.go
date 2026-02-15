@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,12 +13,30 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-const searchTimeout = 5 * time.Second
+func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(data); err != nil {
+		logger.Errorf("Failed to encode JSON response: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":"internal server error"}`)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		logger.Errorf("Failed to write response: %v", err)
+	}
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
 
 func searchHandler(w http.ResponseWriter, r *http.Request) {
 	params, err := parseSearchParams(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -27,37 +46,30 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	if params.Regexp != "" {
 		regex, err = regexp.Compile(params.Regexp)
 		if err != nil {
-			http.Error(w, "Invalid regular expression for 'regexp'", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "Invalid regular expression for 'regexp'")
 			logger.Errorf("Invalid regex pattern for regexp '%s': %v", params.Regexp, err)
 			return
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), searchTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), cfg.SearchTimeout)
 	defer cancel()
 
 	result, err := performSearch(params, regex, ctx)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			http.Error(w, "Search timeout exceeded", http.StatusGatewayTimeout)
+			writeJSONError(w, http.StatusGatewayTimeout, "Search timeout exceeded")
 			logger.Errorf("Search timeout exceeded for term=%s, regexp=%s", params.Term, params.Regexp)
 			return
 		}
-		http.Error(w, "Error during search", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Error during search")
 		logger.Errorf("Error during search: %v", err)
 		return
 	}
 
-	response := map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"matches": result.Matches,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		logger.Errorf("Failed to encode search response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	})
 
 	logger.Infof("Search completed. Found %d matches for term='%s', regexp='%s', in_path='%s'",
 		len(result.Matches), params.Term, params.Regexp, params.InPath)
@@ -111,8 +123,7 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 
 	buildDurationStr := humanReadableDuration(buildDuration)
 	cacheAgeStr := humanReadableDuration(cacheAge)
-	cacheSizeBytes := estimateCacheSize(cache.data)
-	cacheSizeHumanReadable := humanize.Bytes(cacheSizeBytes)
+	cacheSizeHumanReadable := humanize.Bytes(atomic.LoadUint64(&cache.cachedSizeBytes))
 
 	totalSecrets := atomic.LoadInt64(&cache.totalSecrets)
 	fetchedSecrets := atomic.LoadInt64(&cache.fetchedSecrets)
@@ -122,7 +133,8 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		progress = int(fetchedSecrets * 100 / totalSecrets)
 	}
 
-	response := map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"version":             version,
 		"cache_age":           cacheAgeStr,
 		"build_duration":      buildDurationStr,
 		"is_rebuilding":       isRebuilding,
@@ -131,21 +143,14 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		"total_secrets":       totalSecrets,
 		"total_keys_indexed":  totalKeys,
 		"progress_percentage": progress,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		logger.Errorf("Failed to encode status response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	})
 
 	logger.Info("Status requested")
 }
 
 func rebuildHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, http.StatusMethodNotAllowed, "Only POST method is allowed")
 		return
 	}
 
@@ -154,32 +159,27 @@ func rebuildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Invalid JSON body")
 		logger.Errorf("Failed to decode rebuild request body: %v", err)
 		return
 	}
 
 	if reqBody.Rebuild != "true" {
-		http.Error(w, "Invalid value for 'rebuild'; expected 'true'", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Invalid value for 'rebuild'; expected 'true'")
 		return
 	}
 
 	logger.Info("Received request to rebuild cache")
 
+	rebuildWg.Add(1)
 	go func() {
-		if err := rebuildCache(); err != nil {
+		defer rebuildWg.Done()
+		if err := rebuildCache(context.Background()); err != nil {
 			logger.Errorf("Cache rebuild failed: %v", err)
 		}
 	}()
 
-	response := map[string]string{
+	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Cache rebuild started",
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		logger.Errorf("Failed to encode rebuild response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	})
 }
